@@ -1,4 +1,5 @@
 from auth import hash_password
+from rules import seats_ok
 from db import get_conn
 from roster import parse_roster
 
@@ -72,6 +73,9 @@ def apply_to_team(student_id, team_id):
         if any(role == my_role for _, role in members):
             return "막힘", "같은 주 역할의 팀원이 있음"
 
+        if not seats_ok(_team_people(conn, team_id) + [_person(conn, student_id)]):
+            return "막힘", "필수 포함 역할을 맡을 학생의 자리가 모자람"
+
         if not members:
             conn.execute(
                 "insert into tf_members (team_id, slot_no, student_id) values (%s, 1, %s)",
@@ -143,6 +147,10 @@ def cast_vote(voter_id, application_id, vote):
             "where application_id = %s and vote = '찬성' and voter_id = any(%s)",
             (application_id, members),
         ).fetchone()[0]
+        if yes >= len(members):
+            problem = reject_if_invalid(conn, application_id, team_id, applicant_id)
+            if problem:
+                return "거절", problem
         if yes < len(members):
             return "대기", "다른 팀원의 투표를 기다림"
 
@@ -290,3 +298,52 @@ def run_assignment(progress=None):
     if assignment is None:
         return own, 0, log + ["3차 모델까지 실패하여 앱이 스스로 배정함"], []
     return assignment, number, log, []
+
+def reject_if_invalid(conn, application_id, team_id, applicant_id):
+    rows = conn.execute(
+        "select s.main_role from tf_members m "
+        "join tf_students s on s.id = m.student_id where m.team_id = %s",
+        (team_id,),
+    ).fetchall()
+    roles = [r[0] for r in rows]
+    my_role = conn.execute(
+        "select main_role from tf_students where id = %s", (applicant_id,)
+    ).fetchone()[0]
+
+    reason = None
+    if len(roles) >= 4:
+        reason = "팀이 꽉 참"
+    elif my_role in roles:
+        reason = "같은 주 역할의 팀원이 있음"
+    if reason is None and not seats_ok(_team_people(conn, team_id) + [_person(conn, applicant_id)]):
+        reason = "필수 포함 역할을 맡을 학생의 자리가 모자람"
+    if reason is None:
+        return None
+
+    conn.execute(
+        "update tf_applications set status = '거절', reason = %s where id = %s",
+        (reason, application_id),
+    )
+    return "승인 직전 검사에서 규칙을 어김(" + reason + ")"
+
+def _person(conn, student_id):
+    main_role = conn.execute(
+        "select main_role from tf_students where id = %s", (student_id,)
+    ).fetchone()[0]
+    subs = [
+        r[0]
+        for r in conn.execute(
+            "select role from tf_student_sub_roles where student_id = %s", (student_id,)
+        ).fetchall()
+    ]
+    return {"main_role": main_role, "sub_roles": subs}
+
+
+def _team_people(conn, team_id):
+    ids = [
+        r[0]
+        for r in conn.execute(
+            "select student_id from tf_members where team_id = %s", (team_id,)
+        ).fetchall()
+    ]
+    return [_person(conn, i) for i in ids]

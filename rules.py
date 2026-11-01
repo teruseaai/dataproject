@@ -58,3 +58,18 @@ def validate_assignment(teams, unassigned, assignment):
             problems.append(f"{team_name}: 기획자와 웹 프로그래머를 서로 다른 학생이 맡을 수 없음")
 
     return problems
+
+def missing_required(members):
+    can_pl = [can_do(m, PL) for m in members]
+    can_wp = [can_do(m, WP) for m in members]
+    for i in range(len(members)):
+        for j in range(len(members)):
+            if i != j and can_pl[i] and can_wp[j]:
+                return 0
+    if any(can_pl) or any(can_wp):
+        return 1
+    return 2
+
+
+def seats_ok(members_after):
+    return 4 - len(members_after) >= missing_required(members_after)
