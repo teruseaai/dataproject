@@ -38,6 +38,7 @@ else:
     user = st.session_state.user
     with st.container(key="whoami"):
         st.write(f"{user['name']} ({user['student_no']})님으로 로그인함")
+    st.button("새로 고침", key="refresh")
     if st.button("로그아웃"):
         st.session_state.user = None
         st.rerun()
