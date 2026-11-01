@@ -34,3 +34,165 @@ def start_scenario(file_bytes, team_count):
         conn.execute("insert into tf_settings (key, value) values ('closed', 'false')")
 
     return len(students)
+
+def get_setting(key):
+    row = get_conn().execute("select value from tf_settings where key = %s", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def is_closed():
+    return get_setting("closed") == "true"
+
+
+def apply_to_team(student_id, team_id):
+    conn = get_conn()
+    with conn.transaction():
+        if is_closed():
+            return "막힘", "모집이 마감됨"
+
+        if conn.execute("select 1 from tf_members where student_id = %s", (student_id,)).fetchone():
+            return "막힘", "이미 팀이 있음"
+
+        if conn.execute(
+            "select 1 from tf_applications where student_id = %s and status = '대기'", (student_id,)
+        ).fetchone():
+            return "막힘", "결과를 기다리는 지원이 있음"
+
+        members = conn.execute(
+            "select m.student_id, s.main_role from tf_members m "
+            "join tf_students s on s.id = m.student_id where m.team_id = %s",
+            (team_id,),
+        ).fetchall()
+        if len(members) >= 4:
+            return "막힘", "팀이 꽉 참"
+
+        my_role = conn.execute(
+            "select main_role from tf_students where id = %s", (student_id,)
+        ).fetchone()[0]
+        if any(role == my_role for _, role in members):
+            return "막힘", "같은 주 역할의 팀원이 있음"
+
+        if not members:
+            conn.execute(
+                "insert into tf_members (team_id, slot_no, student_id) values (%s, 1, %s)",
+                (team_id, student_id),
+            )
+            conn.execute(
+                "insert into tf_applications (team_id, student_id, status) values (%s, %s, '승인')",
+                (team_id, student_id),
+            )
+            return "승인", "빈 팀이라 바로 승인됨"
+
+        conn.execute(
+            "insert into tf_applications (team_id, student_id, status) values (%s, %s, '대기')",
+            (team_id, student_id),
+        )
+        return "대기", "팀원의 투표를 기다림"
+
+def has_pending(student_id):
+    row = get_conn().execute(
+        "select 1 from tf_applications where student_id = %s and status = '대기'",
+        (student_id,),
+    ).fetchone()
+    return row is not None
+
+def cast_vote(voter_id, application_id, vote):
+    conn = get_conn()
+    with conn.transaction():
+        app = conn.execute(
+            "select team_id, student_id, status from tf_applications where id = %s for update",
+            (application_id,),
+        ).fetchone()
+        if app is None:
+            return "막힘", "지원을 찾을 수 없음"
+        team_id, applicant_id, status = app
+
+        if is_closed():
+            return "막힘", "모집이 마감됨"
+        if status != "대기":
+            return status, "이미 결과가 나온 지원임"
+
+        members = [
+            r[0]
+            for r in conn.execute(
+                "select student_id from tf_members where team_id = %s", (team_id,)
+            ).fetchall()
+        ]
+        if voter_id not in members:
+            return "막힘", "이 팀의 팀원이 아님"
+        if conn.execute(
+            "select 1 from tf_votes where application_id = %s and voter_id = %s",
+            (application_id, voter_id),
+        ).fetchone():
+            return "대기", "이미 투표함"
+
+        conn.execute(
+            "insert into tf_votes (application_id, voter_id, vote) values (%s, %s, %s)",
+            (application_id, voter_id, vote),
+        )
+
+        if vote == "거부":
+            conn.execute(
+                "update tf_applications set status = '거절', reason = '팀원의 거부' where id = %s",
+                (application_id,),
+            )
+            return "거절", "팀원의 거부로 거절됨"
+
+        yes = conn.execute(
+            "select count(*) from tf_votes "
+            "where application_id = %s and vote = '찬성' and voter_id = any(%s)",
+            (application_id, members),
+        ).fetchone()[0]
+        if yes < len(members):
+            return "대기", "다른 팀원의 투표를 기다림"
+
+        if len(members) >= 4:
+            conn.execute(
+                "update tf_applications set status = '거절', reason = '팀이 꽉 참' where id = %s",
+                (application_id,),
+            )
+            return "거절", "팀이 꽉 차서 거절됨"
+
+        used = {
+            r[0]
+            for r in conn.execute(
+                "select slot_no from tf_members where team_id = %s", (team_id,)
+            ).fetchall()
+        }
+        slot = min(set(range(1, 5)) - used)
+        conn.execute(
+            "insert into tf_members (team_id, slot_no, student_id) values (%s, %s, %s)",
+            (team_id, slot, applicant_id),
+        )
+        conn.execute(
+            "update tf_applications set status = '승인' where id = %s", (application_id,)
+        )
+        return "승인", "모든 팀원이 찬성해 승인됨"
+
+def close_recruitment():
+    conn = get_conn()
+    with conn.transaction():
+        if is_closed():
+            return "막힘", "이미 모집이 마감됨"
+        conn.execute(
+            "update tf_applications set status = '거절', reason = '모집 마감' where status = '대기'"
+        )
+        conn.execute(
+            "delete from tf_members where team_id in "
+            "(select team_id from tf_members group by team_id having count(*) = 1)"
+        )
+        conn.execute(
+            "insert into tf_settings (key, value) values ('closed', 'true') "
+            "on conflict (key) do update set value = 'true'"
+        )
+    return "승인", "모집을 마감함"
+
+
+def get_unassigned():
+    rows = get_conn().execute(
+        "select s.name from tf_students s "
+        "where s.is_admin = false "
+        "and not exists (select 1 from tf_members m where m.student_id = s.id) "
+        "order by s.student_no"
+    ).fetchall()
+    return [r[0] for r in rows]
