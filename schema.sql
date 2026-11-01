@@ -3,7 +3,7 @@ create table if not exists tf_students (
     id bigserial primary key,
     student_no text unique not null,
     name text not null,
-    main_role text not null check (main_role in ('기획자', '웹 프로그래머', '프론트엔드 디자이너', '테스터', '보고서 작성자', '발표자')),
+    main_role text check (main_role in ('기획자', '웹 프로그래머', '프론트엔드 디자이너', '테스터', '보고서 작성자', '발표자')),
     password_hash text not null,
     is_admin boolean not null default false
 );
