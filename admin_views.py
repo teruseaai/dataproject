@@ -33,3 +33,58 @@ def show_admin():
     with st.container(key="unassigned"):
         names = get_unassigned()
         st.write("팀이 없는 학생: " + (", ".join(names) if names else "없음"))
+
+def show_assign():
+    from service import is_closed, load_state, run_assignment
+
+    box = st.container(key="assign_status")
+
+    if st.button("AI 배정", key="admin_assign"):
+        if not is_closed():
+            st.session_state.result_msg = "막힘: 먼저 모집을 마감해야 함"
+            st.session_state.proposal = None
+            st.rerun()
+
+        line = box.empty()
+
+        def progress(n):
+            line.write(f"AI가 생각하는 중: {n}차 모델의 응답을 기다리는 중")
+
+        assignment, number, log = run_assignment(progress)
+        _, unassigned = load_state()
+        st.session_state.proposal = {
+            "assignment": assignment,
+            "number": number,
+            "log": log,
+            "people": {s["id"]: s for s in unassigned},
+        }
+        if assignment is None:
+            st.session_state.result_msg = "막힘: AI가 3차 모델까지 배정안을 만들지 못함"
+        else:
+            st.session_state.result_msg = f"승인: {number}차 모델의 배정안이 검사를 통과함"
+        st.rerun()
+
+    proposal = st.session_state.get("proposal")
+    if proposal:
+        with box:
+            for text in proposal["log"]:
+                st.write(text)
+            if proposal["assignment"]:
+                for team, ids in proposal["assignment"].items():
+                    people = [proposal["people"][i] for i in ids if i in proposal["people"]]
+                    names = ", ".join(f"{p['name']}({p['main_role']})" for p in people)
+                    st.write(f"{team}: {names if names else '추가 없음'}")
+
+def show_confirm():
+    from service import confirm_assignment
+
+    if st.button("배정안 확정", key="admin_confirm"):
+        proposal = st.session_state.get("proposal")
+        if not proposal or not proposal["assignment"]:
+            st.session_state.result_msg = "막힘: 확정할 배정안이 없음"
+        else:
+            status, reason = confirm_assignment(proposal["assignment"])
+            st.session_state.result_msg = f"{status}: {reason}"
+            if status == "승인":
+                st.session_state.proposal = None
+        st.rerun()

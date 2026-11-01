@@ -196,3 +196,81 @@ def get_unassigned():
         "order by s.student_no"
     ).fetchall()
     return [r[0] for r in rows]
+
+
+def load_state():
+    conn = get_conn()
+
+    students = {}
+    for db_id, student_no, name, main_role in conn.execute(
+        "select id, student_no, name, main_role from tf_students where is_admin = false"
+    ).fetchall():
+        students[db_id] = {"id": student_no, "name": name, "main_role": main_role, "sub_roles": []}
+
+    for db_id, role in conn.execute("select student_id, role from tf_student_sub_roles").fetchall():
+        if db_id in students:
+            students[db_id]["sub_roles"].append(role)
+
+    teams = {}
+    placed = set()
+    for team_name, db_id in conn.execute(
+        "select t.name, m.student_id from tf_teams t "
+        "left join tf_members m on m.team_id = t.id "
+        "order by t.id, m.slot_no"
+    ).fetchall():
+        teams.setdefault(team_name, [])
+        if db_id is not None:
+            teams[team_name].append(students[db_id])
+            placed.add(db_id)
+
+    unassigned = [s for db_id, s in students.items() if db_id not in placed]
+    unassigned.sort(key=lambda s: s["id"])
+    return teams, unassigned
+
+def run_assignment(progress=None):
+    from ai import run_with_fallback
+    from assign import build_prompt, make_check, parse_response
+    from config import MODELS
+
+    teams, unassigned = load_state()
+    if not unassigned:
+        return None, None, ["팀이 없는 학생이 없음"]
+
+    prompt = build_prompt(teams, unassigned)
+    text, number, log = run_with_fallback(MODELS, prompt, make_check(teams, unassigned), progress=progress)
+    if text is None:
+        return None, None, log
+    return parse_response(text), number, log
+
+def confirm_assignment(assignment):
+    from rules import validate_assignment
+
+    conn = get_conn()
+    with conn.transaction():
+        if not is_closed():
+            return "막힘", "먼저 모집을 마감해야 함"
+
+        teams, unassigned = load_state()
+        problems = validate_assignment(teams, unassigned, assignment)
+        if problems:
+            return "막힘", problems[0]
+
+        for team_name, student_nos in assignment.items():
+            team_id = conn.execute(
+                "select id from tf_teams where name = %s", (team_name,)
+            ).fetchone()[0]
+            used = {
+                r[0]
+                for r in conn.execute(
+                    "select slot_no from tf_members where team_id = %s", (team_id,)
+                ).fetchall()
+            }
+            for student_no in student_nos:
+                slot = min(set(range(1, 5)) - used)
+                used.add(slot)
+                conn.execute(
+                    "insert into tf_members (team_id, slot_no, student_id) "
+                    "select %s, %s, id from tf_students where student_no = %s",
+                    (team_id, slot, student_no),
+                )
+    return "승인", "배정안을 확정함"

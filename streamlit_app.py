@@ -1,7 +1,7 @@
 import streamlit as st
 
 from accounts import ensure_admin, login
-from admin_views import show_admin
+from admin_views import show_admin, show_assign, show_confirm
 from views import show_teams
 
 st.set_page_config(page_title="팀 편성 앱")
@@ -44,3 +44,5 @@ else:
     show_teams(user, st.container(key="result"))
     if user["is_admin"]:
         show_admin()
+        show_assign()
+        show_confirm()
