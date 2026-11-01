@@ -227,7 +227,7 @@ def load_state():
     unassigned.sort(key=lambda s: s["id"])
     return teams, unassigned
 
-def run_assignment(progress=None):
+def _run_ai(progress=None):
     from ai import run_with_fallback
     from assign import build_prompt, make_check, parse_response
     from config import MODELS
@@ -274,3 +274,19 @@ def confirm_assignment(assignment):
                     (team_id, slot, student_no),
                 )
     return "승인", "배정안을 확정함"
+
+def run_assignment(progress=None):
+    from solver import explain_impossible, find_assignment
+
+    teams, unassigned = load_state()
+    if not unassigned:
+        return None, None, ["팀이 없는 학생이 없음"], []
+
+    own = find_assignment(teams, unassigned)
+    if own is None:
+        return None, None, ["규칙을 지키는 배정이 없음"], explain_impossible(teams, unassigned)
+
+    assignment, number, log = _run_ai(progress)
+    if assignment is None:
+        return own, 0, log + ["3차 모델까지 실패하여 앱이 스스로 배정함"], []
+    return assignment, number, log, []

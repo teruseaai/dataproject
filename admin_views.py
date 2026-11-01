@@ -50,18 +50,18 @@ def show_assign():
         def progress(n):
             line.write(f"AI가 생각하는 중: {n}차 모델의 응답을 기다리는 중")
 
-        assignment, number, log = run_assignment(progress)
+        assignment, number, log, reasons = run_assignment(progress)
         _, unassigned = load_state()
         st.session_state.proposal = {
             "assignment": assignment,
             "number": number,
-            "log": log,
+            "log": log + reasons,
             "people": {s["id"]: s for s in unassigned},
         }
         if assignment is None:
-            st.session_state.result_msg = "막힘: AI가 3차 모델까지 배정안을 만들지 못함"
+            st.session_state.result_msg = "막힘: 규칙을 지키는 배정이 없음"
         else:
-            st.session_state.result_msg = f"승인: {number}차 모델의 배정안이 검사를 통과함"
+            st.session_state.result_msg = (f"승인: {number}차 모델의 배정안이 검사를 통과함" if number else "승인: 앱이 스스로 배정안을 만듦")
         st.rerun()
 
     proposal = st.session_state.get("proposal")
